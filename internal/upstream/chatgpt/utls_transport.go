@@ -17,6 +17,7 @@ import (
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/http2"
+	"golang.org/x/net/proxy"
 )
 
 // NewUTLSTransport 返回一个带 uTLS 浏览器指纹伪装的 http.RoundTripper。
@@ -33,7 +34,7 @@ import (
 //   - 首次 h2 失败且为协议级错误(例如 ALPN 回退到 h1)时自动切 h1 重试
 //   - 连接不做跨请求复用的特殊处理,依赖各子 transport 自身的空闲池
 //
-// proxyURL 只支持 http/https,socks5 需要走另一条路径(当前账号池均为 HTTP 代理)。
+// proxyURL 支持 http/https/socks5/socks5h。
 func NewUTLSTransport(proxyURL string, idleTimeout time.Duration) (http.RoundTripper, error) {
 	if idleTimeout <= 0 {
 		idleTimeout = 30 * time.Second
@@ -51,7 +52,18 @@ func NewUTLSTransport(proxyURL string, idleTimeout time.Duration) (http.RoundTri
 		case "http", "https":
 			rt.proxyURL = u
 		case "socks5", "socks5h":
-			return nil, fmt.Errorf("socks5 proxy is not supported by utls transport yet")
+			rt.proxyURL = u
+			// 构造 SOCKS5 拨号器
+			var auth *proxy.Auth
+			if u.User != nil {
+				pw, _ := u.Password()
+				auth = &proxy.Auth{User: u.Username(), Password: pw}
+			}
+			socksDialer, err := proxy.SOCKS5("tcp", u.Host, auth, rt.dialer)
+			if err != nil {
+				return nil, fmt.Errorf("socks5 dialer: %w", err)
+			}
+			rt.socksDialer = socksDialer
 		default:
 			return nil, fmt.Errorf("unsupported proxy scheme %q", u.Scheme)
 		}
@@ -90,6 +102,7 @@ var forceH1 = true
 type utlsRoundTripper struct {
 	proxyURL    *url.URL
 	dialer      *net.Dialer
+	socksDialer proxy.Dialer // non-nil when using socks5
 	idleTimeout time.Duration
 
 	mu sync.Mutex
@@ -192,6 +205,14 @@ func (rt *utlsRoundTripper) dialRaw(ctx context.Context, addr string) (net.Conn,
 	if rt.proxyURL == nil {
 		return rt.dialer.DialContext(ctx, "tcp", addr)
 	}
+	// SOCKS5 代理:通过 socksDialer 直接拨号,拿到的 conn 已经是到目标的 TCP 隧道
+	if rt.socksDialer != nil {
+		if ctxDialer, ok := rt.socksDialer.(proxy.ContextDialer); ok {
+			return ctxDialer.DialContext(ctx, "tcp", addr)
+		}
+		return rt.socksDialer.Dial("tcp", addr)
+	}
+	// HTTP(S) CONNECT 代理
 	proxyAddr := rt.proxyURL.Host
 	if !strings.Contains(proxyAddr, ":") {
 		if strings.EqualFold(rt.proxyURL.Scheme, "https") {
