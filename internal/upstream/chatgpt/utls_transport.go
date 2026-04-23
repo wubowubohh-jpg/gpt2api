@@ -56,8 +56,8 @@ func NewUTLSTransport(proxyURL string, idleTimeout time.Duration) (http.RoundTri
 			// 构造 SOCKS5 拨号器
 			var auth *proxy.Auth
 			if u.User != nil {
-				pw, _ := u.Password()
-				auth = &proxy.Auth{User: u.Username(), Password: pw}
+				pw, _ := u.User.Password()
+				auth = &proxy.Auth{User: u.User.Username(), Password: pw}
 			}
 			socksDialer, err := proxy.SOCKS5("tcp", u.Host, auth, rt.dialer)
 			if err != nil {
