@@ -82,7 +82,7 @@ func main() {
 	defer sqldb.Close()
 
 	// 内嵌迁移:启动时自动建表 / 升级表结构(幂等)
-	if err := db.AutoMigrate(sqldb.DB); err != nil {
+	if err := db.AutoMigrate(cfg.MySQL.DSN); err != nil {
 		log.Fatal("auto-migrate failed", zap.Error(err))
 	}
 
