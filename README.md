@@ -23,6 +23,7 @@
 - [三、技术栈](#三技术栈)
 - [四、架构概览](#四架构概览)
 - [五、快速开始(Docker 一键部署)](#五快速开始docker-一键部署)
+- [五-B、Zeabur 一键部署(推荐)](#五-bzeabur-一键部署推荐)
 - [六、配置说明](#六配置说明)
 - [七、API 使用示例](#七api-使用示例)
 - [八、重点能力详解](#八重点能力详解)
@@ -121,6 +122,7 @@
 **部署**
 
 - Docker Compose(MySQL + Redis + server,可选 nginx)
+- **Zeabur 一键部署**(GitHub 直连,自动构建 + 自动建表)
 - 默认单机;水平扩展见 [`deploy/README.md`](deploy/README.md)
 
 ---
@@ -324,9 +326,88 @@ docker compose logs -f server
 
 ---
 
+## 五-B、Zeabur 一键部署(推荐)
+
+> 无需本地安装 Go / Node / Docker,GitHub 仓库直连即可全自动构建 + 上线。  
+> 数据库自动建表——服务启动时内嵌 goose 迁移自动执行,**零手动 SQL**。
+
+### 1. 前置条件
+
+- 一个 [Zeabur](https://zeabur.com) 账号(免费额度够起步)
+- 本仓库 fork 到你自己的 GitHub(或使用原仓库)
+
+### 2. 部署步骤
+
+1. **创建项目**:登录 Zeabur → New Project → 选区域(推荐 `ap-east` 香港)。
+
+2. **添加 MySQL**:点 `+ Add Service` → `Marketplace` → `MySQL`。  
+   Zeabur 会自动注入 `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USERNAME`, `MYSQL_PASSWORD`, `MYSQL_DATABASE` 环境变量。
+
+3. **添加 Redis**:点 `+ Add Service` → `Marketplace` → `Redis`。  
+   Zeabur 会自动注入 `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`。
+
+4. **部署 gpt2api**:点 `+ Add Service` → `Git` → 选择你 fork 的 `gpt2api` 仓库。  
+   Zeabur 自动检测根目录 `Dockerfile`,开始多阶段构建(Go 后端 + Node 前端)。
+
+5. **配置环境变量**:在 gpt2api 服务的 `Variables` 页面添加:
+
+   | 变量名 | 必填 | 说明 |
+   |--------|------|------|
+   | `GPT2API_JWT_SECRET` | ✅ | JWT 签名密钥,至少 32 字符随机串 |
+   | `GPT2API_CRYPTO_AES_KEY` | ✅ | AES-256 密钥,64 位 hex(32 字节) |
+   | `GPT2API_APP_BASE_URL` | 推荐 | 对外访问 URL,如 `https://xxx.zeabur.app` |
+   | `GPT2API_SECURITY_CORS_ORIGINS` | 可选 | CORS 白名单,逗号分隔 |
+
+   > **MySQL / Redis 连接无需手动配置**——应用启动时会自动从 Zeabur 注入的 `MYSQL_*` / `REDIS_*` 环境变量组装 DSN。
+
+6. **绑定域名**:在 `Networking` 页面添加自定义域名或使用 `*.zeabur.app` 子域。
+
+7. **等待构建完成**:首次构建约 2~4 分钟(拉依赖 + 编译),之后每次 `git push` 自动触发重新部署。
+
+### 3. 自动建表原理
+
+应用启动时执行以下流程:
+1. 连接 MySQL(DSN 由 Zeabur 环境变量自动组装)
+2. 内嵌的 goose 迁移引擎自动执行 `sql/migrations/` 下的全部 `.sql`(幂等)
+3. 首次部署自动创建全部 20+ 张表 + 种子数据
+4. 后续 `git push` 新增迁移文件时,重启自动增量执行
+
+### 4. 自动建表覆盖的关键表
+
+| 表 | 作用 |
+|---|---|
+| `users` / `user_groups` | 用户体系 |
+| `api_keys` | 下游 API Key |
+| `oai_accounts` / `oai_account_cookies` / `account_proxy_bindings` | ChatGPT 账号池 |
+| `proxies` | 代理池 |
+| `models` / `billing_ratios` | 模型配置 + 分组倍率 |
+| `image_tasks` | 异步生图任务 |
+| `usage_logs` / `credit_transactions` | 用量 + 积分流水 |
+| `recharge_orders` / `redeem_codes` | 充值 + 兑换码 |
+| `system_configs` / `audit_logs` / `announcements` | 系统设置 + 审计 + 公告 |
+
+### 5. 环境变量完整参考
+
+所有 `configs/config.yaml` 中的配置项均可通过 `GPT2API_` 前缀的环境变量覆盖(下划线替代 `.`):
+
+```
+GPT2API_APP_LISTEN=:8080
+GPT2API_MYSQL_DSN=user:pass@tcp(host:3306)/db?parseTime=true&...
+GPT2API_REDIS_ADDR=host:6379
+GPT2API_REDIS_PASSWORD=xxx
+GPT2API_JWT_SECRET=your_secret
+GPT2API_CRYPTO_AES_KEY=64_hex_chars
+GPT2API_LOG_LEVEL=info
+GPT2API_LOG_FORMAT=json
+```
+
+> 在 Zeabur 上,`GPT2API_MYSQL_DSN` 和 `GPT2API_REDIS_ADDR` **不需要手动设置**,应用会自动从平台注入的变量组装。
+
+---
+
 ## 六、配置说明
 
-**核心配置文件:`configs/config.yaml`**(Docker 部署时通过环境变量 `GPT2API_*` 覆盖)。完整字段见 [`configs/config.example.yaml`](configs/config.example.yaml)。
+**核心配置文件:`configs/config.yaml`**(Docker 部署时通过环境变量 `GPT2API_*` 覆盖;Zeabur 部署时无需此文件,全走环境变量)。完整字段见 [`configs/config.example.yaml`](configs/config.example.yaml)。
 
 | 段落 | 关键字段 | 说明 |
 |------|---------|------|

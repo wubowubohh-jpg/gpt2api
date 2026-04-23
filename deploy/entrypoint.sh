@@ -44,10 +44,16 @@ run_migrate() {
     log "SKIP_MIGRATE=1, skipping migrations"
     return 0
   fi
-  local dsn="${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(${MYSQL_HOST}:${MYSQL_PORT})/${MYSQL_DATABASE}?parseTime=true&multiStatements=true&charset=utf8mb4,utf8"
-  log "running goose migrations..."
-  goose -dir /app/sql/migrations mysql "${dsn}" up
-  log "migrations done."
+  # 优先使用内嵌迁移(Go 二进制启动时自动 goose up),无需外部 goose。
+  # 仅当 LEGACY_GOOSE=1 时走外部 goose(兼容旧版 deploy/Dockerfile)。
+  if [[ "${LEGACY_GOOSE:-0}" == "1" ]] && command -v goose &>/dev/null; then
+    local dsn="${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(${MYSQL_HOST}:${MYSQL_PORT})/${MYSQL_DATABASE}?parseTime=true&multiStatements=true&charset=utf8mb4,utf8"
+    log "running external goose migrations..."
+    goose -dir /app/sql/migrations mysql "${dsn}" up
+    log "external migrations done."
+  else
+    log "migrations will run embedded on server start."
+  fi
 }
 
 wait_mysql || true

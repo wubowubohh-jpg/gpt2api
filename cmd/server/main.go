@@ -81,6 +81,11 @@ func main() {
 	}
 	defer sqldb.Close()
 
+	// 内嵌迁移:启动时自动建表 / 升级表结构(幂等)
+	if err := db.AutoMigrate(sqldb.DB); err != nil {
+		log.Fatal("auto-migrate failed", zap.Error(err))
+	}
+
 	rdb, err := db.NewRedis(cfg.Redis)
 	if err != nil {
 		log.Fatal("redis init", zap.Error(err))

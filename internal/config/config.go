@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -127,22 +128,129 @@ func Load(path string) (*Config, error) {
 	var loadErr error
 	once.Do(func() {
 		v := viper.New()
-		v.SetConfigFile(path)
 		v.SetEnvPrefix("GPT2API")
 		v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 		v.AutomaticEnv()
+
+		// 设置合理的默认值,使纯环境变量部署(Zeabur 等)无需 config.yaml
+		setDefaults(v)
+
+		// config.yaml 是可选的——文件存在就加载,不存在则全走环境变量 + 默认值
+		v.SetConfigFile(path)
 		if err := v.ReadInConfig(); err != nil {
-			loadErr = fmt.Errorf("read config: %w", err)
-			return
+			// 如果文件不存在,这不是致命错误;其他错误(权限/语法)仍然上报
+			if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+				if !isFileNotExist(path) {
+					loadErr = fmt.Errorf("read config: %w", err)
+					return
+				}
+			}
+			// 文件不存在,继续靠环境变量
 		}
+
 		var c Config
 		if err := v.Unmarshal(&c); err != nil {
 			loadErr = fmt.Errorf("unmarshal config: %w", err)
 			return
 		}
+
+		// Zeabur / PaaS 自动注入的独立环境变量 → 自动组装 DSN / Addr
+		autoWirePaaS(&c)
+
 		global = &c
 	})
 	return global, loadErr
+}
+
+// setDefaults 为 Zeabur / 纯环境变量部署场景设置合理默认值。
+func setDefaults(v *viper.Viper) {
+	v.SetDefault("app.name", "gpt2api")
+	v.SetDefault("app.env", "prod")
+	v.SetDefault("app.listen", ":8080")
+	v.SetDefault("app.base_url", "")
+
+	v.SetDefault("log.level", "info")
+	v.SetDefault("log.format", "json")
+	v.SetDefault("log.output", "stdout")
+
+	v.SetDefault("mysql.max_open_conns", 50)
+	v.SetDefault("mysql.max_idle_conns", 10)
+	v.SetDefault("mysql.conn_max_lifetime_sec", 3600)
+
+	v.SetDefault("redis.db", 0)
+	v.SetDefault("redis.pool_size", 50)
+
+	v.SetDefault("jwt.access_ttl_sec", 86400)
+	v.SetDefault("jwt.refresh_ttl_sec", 2592000)
+	v.SetDefault("jwt.issuer", "gpt2api")
+
+	v.SetDefault("security.bcrypt_cost", 10)
+
+	v.SetDefault("scheduler.min_interval_sec", 60)
+	v.SetDefault("scheduler.daily_usage_ratio", 0.6)
+	v.SetDefault("scheduler.lock_ttl_sec", 1200)
+	v.SetDefault("scheduler.cooldown_429_sec", 600)
+	v.SetDefault("scheduler.warned_pause_hours", 24)
+
+	v.SetDefault("upstream.base_url", "https://chatgpt.com")
+	v.SetDefault("upstream.request_timeout_sec", 60)
+	v.SetDefault("upstream.sse_read_timeout_sec", 300)
+
+	v.SetDefault("smtp.port", 465)
+	v.SetDefault("smtp.from_name", "GPT2API")
+	v.SetDefault("smtp.use_tls", true)
+
+	v.SetDefault("epay.sign_type", "MD5")
+	v.SetDefault("epay.expires_min", 30)
+}
+
+// isFileNotExist 检测文件是否不存在。
+func isFileNotExist(path string) bool {
+	_, err := os.Stat(path)
+	return os.IsNotExist(err)
+}
+
+// autoWirePaaS 从 Zeabur / Railway / Render 等 PaaS 平台注入的独立环境变量
+// 自动组装 MySQL DSN 和 Redis Addr。仅当 DSN/Addr 尚未设置时生效。
+func autoWirePaaS(c *Config) {
+	// ---- MySQL DSN ----
+	// Zeabur 注入: MYSQL_HOST, MYSQL_PORT, MYSQL_USERNAME, MYSQL_PASSWORD, MYSQL_DATABASE
+	// 兼容 Docker Compose 的 MYSQL_USER
+	if c.MySQL.DSN == "" {
+		host := envOr("MYSQL_HOST", "")
+		port := envOr("MYSQL_PORT", "3306")
+		user := envOr("MYSQL_USERNAME", envOr("MYSQL_USER", ""))
+		pass := envOr("MYSQL_PASSWORD", "")
+		dbname := envOr("MYSQL_DATABASE", "gpt2api")
+		if host != "" && user != "" {
+			c.MySQL.DSN = fmt.Sprintf(
+				"%s:%s@tcp(%s:%s)/%s?parseTime=true&loc=Local&charset=utf8mb4&collation=utf8mb4_unicode_ci",
+				user, pass, host, port, dbname,
+			)
+		}
+	}
+
+	// ---- Redis Addr ----
+	// Zeabur 注入: REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
+	if c.Redis.Addr == "" {
+		host := envOr("REDIS_HOST", "")
+		port := envOr("REDIS_PORT", "6379")
+		if host != "" {
+			c.Redis.Addr = host + ":" + port
+		}
+	}
+	if c.Redis.Password == "" {
+		if p := os.Getenv("REDIS_PASSWORD"); p != "" {
+			c.Redis.Password = p
+		}
+	}
+}
+
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
 }
 
 // Get 返回全局配置,仅在 Load 之后调用。

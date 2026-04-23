@@ -1,0 +1,45 @@
+{
+  "build": {
+    "type": "dockerfile",
+    "dockerfile": "Dockerfile"
+  },
+  "start": {
+    "command": "/app/gpt2api -c /app/configs/config.yaml"
+  },
+  "ports": [
+    {
+      "port": 8080,
+      "type": "http"
+    }
+  ],
+  "healthcheck": {
+    "path": "/healthz",
+    "port": 8080
+  },
+  "env": {
+    "GPT2API_JWT_SECRET": {
+      "description": "JWT 签名密钥, 至少 32 字符随机串",
+      "required": true
+    },
+    "GPT2API_CRYPTO_AES_KEY": {
+      "description": "AES-256 密钥, 64 位 hex (32 字节)",
+      "required": true
+    },
+    "GPT2API_APP_BASE_URL": {
+      "description": "对外访问 URL, 如 https://xxx.zeabur.app",
+      "required": false
+    },
+    "GPT2API_APP_LISTEN": {
+      "description": "HTTP 监听地址",
+      "default": ":8080"
+    },
+    "GPT2API_LOG_LEVEL": {
+      "description": "日志级别 debug|info|warn|error",
+      "default": "info"
+    },
+    "GPT2API_LOG_FORMAT": {
+      "description": "日志格式 json|console",
+      "default": "json"
+    }
+  }
+}

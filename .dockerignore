@@ -1,0 +1,44 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+
+# Node (前端在 Stage 2 单独 COPY)
+web/node_modules
+web/.cache
+web/.vite
+
+# Deploy 旧产物
+deploy/bin
+deploy/logs
+deploy/updates
+
+# 日志与数据
+logs
+data
+*.log
+
+# 临时文件
+tmp
+_tmp
+*.bak
+*.tmp
+
+# Python legacy
+__pycache__
+.venv
+venv
+legacy
+
+# 文档 / 截图(不影响构建)
+docs/screenshots
+assets
+*.har
+
+# macOS / Windows
+.DS_Store
+Thumbs.db
